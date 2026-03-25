@@ -3,21 +3,16 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/timholm/factory-v2/internal/audit"
 	"github.com/timholm/factory-v2/internal/build"
 	"github.com/timholm/factory-v2/internal/config"
 	"github.com/timholm/factory-v2/internal/db"
-	"github.com/timholm/factory-v2/internal/discover"
 	"github.com/timholm/factory-v2/internal/report"
-	"github.com/timholm/factory-v2/internal/research"
 	"github.com/timholm/factory-v2/internal/synthesize"
 )
 
@@ -148,159 +143,3 @@ func overseerCmd() *cobra.Command {
 	}
 }
 
-func (f *Factory) sleepCycle(ctx context.Context, cycle int) {
-	log.Printf("[cycle %d] sleeping %s", cycle, f.cfg.CycleInterval)
-	timer := time.NewTimer(f.cfg.CycleInterval)
-	select {
-	case <-ctx.Done():
-		timer.Stop()
-	case <-timer.C:
-	}
-}
-
-// Factory is the main orchestrator.
-type Factory struct {
-	cfg        *config.Config
-	db         *db.Store
-	discover   *discover.Discoverer
-	research   *research.Researcher
-	synthesize *synthesize.Synthesizer
-	build      *build.Builder
-	audit      *audit.Auditor
-	report     *report.Reporter
-}
-
-// Run executes the full autonomous loop.
-func (f *Factory) Run(ctx context.Context) error {
-	for cycle := 1; ; cycle++ {
-		log.Printf("[cycle %d] starting discovery", cycle)
-
-		clusters, err := f.discover.FindClusters(ctx)
-		if err != nil {
-			log.Printf("[cycle %d] discover error: %v", cycle, err)
-			f.sleepCycle(ctx, cycle)
-			continue
-		}
-
-		log.Printf("[cycle %d] found %d clusters", cycle, len(clusters))
-
-		// Research + synthesize all clusters first (fast, uses Opus)
-		type buildJob struct {
-			clusterID int
-			spec      *synthesize.ProductSpec
-		}
-		var jobs []buildJob
-
-		for i, cluster := range clusters {
-			if i >= f.cfg.MaxBuilds {
-				break
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-
-			clusterID, err := f.db.InsertCluster(ctx, cluster)
-			if err != nil {
-				log.Printf("insert cluster: %v", err)
-				continue
-			}
-
-			log.Printf("[cluster %d] researching: %s", clusterID, cluster.ProblemSpace)
-			_ = f.db.UpdateClusterStatus(ctx, clusterID, "researching")
-
-			res, err := f.research.Investigate(ctx, cluster)
-			if err != nil {
-				log.Printf("research error: %v", err)
-				_ = f.db.UpdateClusterStatus(ctx, clusterID, "failed")
-				continue
-			}
-
-			log.Printf("[cluster %d] synthesizing spec", clusterID)
-			_ = f.db.UpdateClusterStatus(ctx, clusterID, "synthesizing")
-
-			spec, err := f.synthesize.Fuse(ctx, res)
-			if err != nil {
-				log.Printf("synthesize error: %v", err)
-				_ = f.db.UpdateClusterStatus(ctx, clusterID, "failed")
-				continue
-			}
-
-			_ = f.db.SaveSpec(ctx, clusterID, spec)
-			_ = f.db.UpdateClusterStatus(ctx, clusterID, "building")
-			jobs = append(jobs, buildJob{clusterID: clusterID, spec: spec})
-		}
-
-		// Build in parallel — 6 workers, each gets its own tmux session
-		workers := 6
-		if len(jobs) < workers {
-			workers = len(jobs)
-		}
-		log.Printf("[cycle %d] launching %d parallel builds (%d jobs)", cycle, workers, len(jobs))
-
-		jobCh := make(chan buildJob, len(jobs))
-		for _, j := range jobs {
-			jobCh <- j
-		}
-		close(jobCh)
-
-		var wg sync.WaitGroup
-		var mirrorMu sync.Mutex // serialize GitHub pushes
-
-		for w := 0; w < workers; w++ {
-			wg.Add(1)
-			go func(workerID int) {
-				defer wg.Done()
-				for job := range jobCh {
-					spec := job.spec
-					clusterID := job.clusterID
-
-					log.Printf("[worker %d] building: %s", workerID, spec.Name)
-					buildID, err := f.db.InsertBuild(ctx, clusterID, spec)
-					if err != nil {
-						log.Printf("[worker %d] insert build: %v", workerID, err)
-						continue
-					}
-
-					if err := f.build.Execute(ctx, spec); err != nil {
-						log.Printf("[worker %d] build failed: %s — %v", workerID, spec.Name, err)
-						_ = f.db.UpdateBuildStatus(ctx, buildID, "failed", err.Error())
-						_ = f.db.UpdateClusterStatus(ctx, clusterID, "failed")
-						continue
-					}
-
-					// Serialize GitHub push (only one at a time)
-					mirrorMu.Lock()
-					githubURL := fmt.Sprintf("https://github.com/%s/%s", f.cfg.GitHubUser, spec.Name)
-					_ = f.db.UpdateBuildShipped(ctx, buildID, githubURL)
-					_ = f.db.UpdateClusterStatus(ctx, clusterID, "shipped")
-					mirrorMu.Unlock()
-
-					log.Printf("[worker %d] shipped: %s", workerID, spec.Name)
-
-					// Audit
-					score, err := f.audit.Score(ctx, spec.Name)
-					if err != nil {
-						log.Printf("[worker %d] audit error: %v", workerID, err)
-					} else {
-						_ = f.db.UpdateBuildScore(ctx, buildID, score)
-						if score < 50 {
-							log.Printf("[worker %d] score %d < 50, deleting %s", workerID, score, spec.Name)
-							_ = f.audit.Delete(ctx, spec.Name)
-							_ = f.db.UpdateBuildStatus(ctx, buildID, "failed", "quality score too low")
-						}
-					}
-				}
-			}(w)
-		}
-		wg.Wait()
-
-		// Report
-		if err := f.report.Generate(ctx); err != nil {
-			log.Printf("[cycle %d] report error: %v", cycle, err)
-		}
-
-		f.sleepCycle(ctx, cycle)
-	}
-}
