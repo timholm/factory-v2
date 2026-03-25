@@ -1,0 +1,42 @@
+# factory-v2
+
+> Autonomous research-to-product factory. One binary, one loop.
+
+## What is this?
+
+factory-v2 is a Go binary that autonomously:
+1. Discovers arXiv papers and clusters them by problem space
+2. Extracts techniques from each paper
+3. Finds related GitHub repositories
+4. Uses Claude Opus to synthesize a product spec fusing 7 papers
+5. Uses Claude Sonnet to build the entire repo in one session
+6. Validates quality and pushes to GitHub
+7. Audits shipped repos and deletes low-quality ones
+
+## Architecture
+
+Single Go binary with cobra CLI. Uses Postgres for state, Claude CLI for AI, GitHub API for repo management. Runs locally on macOS.
+
+## Commands
+
+- `factory-v2 run` — full autonomous loop
+- `factory-v2 build --spec spec.json` — build one spec
+- `factory-v2 status` — pipeline status
+- `factory-v2 audit` — quality audit all repos
+
+## Key source files
+
+- main.go — CLI and run loop
+- internal/discover/ — paper discovery and clustering
+- internal/research/ — technique extraction and repo search
+- internal/synthesize/ — Claude Opus spec fusion
+- internal/build/ — Claude Sonnet build, scaffold, validate, git
+- internal/audit/ — quality scoring
+- internal/db/ — Postgres state
+- internal/report/ — pipeline reporting
+
+## Install
+
+```
+go install github.com/timholm/factory-v2@latest
+```
