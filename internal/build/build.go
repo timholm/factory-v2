@@ -85,10 +85,14 @@ func (b *Builder) Execute(ctx context.Context, spec *synthesize.ProductSpec) err
 		maxTurns = 60 // hard ceiling
 	}
 
-	// ONE Claude session to build everything
-	log.Printf("[build] invoking Claude for %s (max %d turns)", spec.Name, maxTurns)
-	if err := invokeClaude(ctx, b.cfg.ClaudeBinary, prompt, workDir, maxTurns, false); err != nil {
-		return fmt.Errorf("claude build: %w", err)
+	// Try team build first (architect+coder+tester), fall back to single session
+	log.Printf("[build] team-building %s (max %d turns)", spec.Name, maxTurns)
+	specContent, _ := os.ReadFile(filepath.Join(workDir, "SPEC.md"))
+	if err := TeamBuild(b.cfg.ClaudeBinary, workDir, string(specContent), spec.Language, spec.Name, maxTurns); err != nil {
+		log.Printf("[build] team build failed, falling back to single session: %v", err)
+		if err := invokeClaude(ctx, b.cfg.ClaudeBinary, prompt, workDir, maxTurns, false); err != nil {
+			return fmt.Errorf("claude build: %w", err)
+		}
 	}
 
 	// Resolve deps

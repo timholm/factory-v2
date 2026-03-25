@@ -121,11 +121,16 @@ func runOverseer() {
 		// Auto-fix critical issues
 		for _, issue := range audit.Issues {
 			if issue.Priority == "critical" && issue.Fix != "" {
+				// Try shell command first
 				log.Printf("[overseer] AUTO-FIXING: %s", issue.Fix)
 				fixCmd := exec.Command("sh", "-c", issue.Fix)
 				fixOut, fixErr := fixCmd.CombinedOutput()
 				if fixErr != nil {
-					log.Printf("[overseer] fix failed: %v — %s", fixErr, string(fixOut))
+					log.Printf("[overseer] shell fix failed, trying self-modification: %v", fixErr)
+					// Use Claude Code team to fix the factory's own code
+					if err := SelfModify(issue.Problem, issue.Fix); err != nil {
+						log.Printf("[overseer] self-modification failed: %v", err)
+					}
 				} else {
 					log.Printf("[overseer] fix applied: %s", string(fixOut))
 				}
