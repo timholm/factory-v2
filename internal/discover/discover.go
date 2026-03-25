@@ -11,10 +11,10 @@ import (
 
 // Paper represents a paper from the archive API.
 type Paper struct {
-	ID       string `json:"id"`
+	ID       string `json:"arxiv_id"`
 	Title    string `json:"title"`
 	Abstract string `json:"abstract"`
-	Category string `json:"category"`
+	Category string `json:"categories"`
 }
 
 // Cluster is a group of 7 diverse papers about one problem space.
@@ -78,29 +78,60 @@ func (d *Discoverer) FindClusters(ctx context.Context) ([]Cluster, error) {
 }
 
 func (d *Discoverer) fetchPapers(ctx context.Context) ([]Paper, error) {
-	url := fmt.Sprintf("%s/api/papers?limit=200", d.archiveURL)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
+	// Fetch from multiple categories for diversity
+	categories := []string{"cs.AI", "cs.CL", "cs.LG", "cs.SE", "cs.CV"}
+	var allPapers []Paper
+	seen := make(map[string]bool)
+
+	for _, cat := range categories {
+		url := fmt.Sprintf("%s/papers/recent?cat=%s&days=14&limit=50", d.archiveURL, cat)
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			continue
+		}
+
+		resp, err := d.client.Do(req)
+		if err != nil {
+			continue
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != http.StatusOK {
+			continue
+		}
+
+		// Archive API wraps in {"papers": [...]}
+		var wrapped struct {
+			Papers []Paper `json:"papers"`
+		}
+		if err := json.Unmarshal(body, &wrapped); err == nil && len(wrapped.Papers) > 0 {
+			for _, p := range wrapped.Papers {
+				if !seen[p.ID] {
+					seen[p.ID] = true
+					allPapers = append(allPapers, p)
+				}
+			}
+			continue
+		}
+
+		// Try bare array
+		var papers []Paper
+		if err := json.Unmarshal(body, &papers); err == nil {
+			for _, p := range papers {
+				if !seen[p.ID] {
+					seen[p.ID] = true
+					allPapers = append(allPapers, p)
+				}
+			}
+		}
 	}
 
-	resp, err := d.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("archive API returned %d: %s", resp.StatusCode, string(body))
+	if len(allPapers) == 0 {
+		return nil, fmt.Errorf("no papers found from archive")
 	}
 
-	var papers []Paper
-	if err := json.NewDecoder(resp.Body).Decode(&papers); err != nil {
-		return nil, fmt.Errorf("decode papers: %w", err)
-	}
-
-	return papers, nil
+	return allPapers, nil
 }
 
 func groupByCategory(papers []Paper) map[string][]Paper {
