@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 )
 
 // Paper represents a paper from the archive API.
@@ -45,11 +46,14 @@ func (d *Discoverer) FindClusters(ctx context.Context) ([]Cluster, error) {
 		return nil, fmt.Errorf("fetch papers: %w", err)
 	}
 
+	// Filter to only papers relevant to factory improvement
+	papers = filterFactoryRelevant(papers)
+
 	if len(papers) == 0 {
-		return nil, fmt.Errorf("no papers found")
+		return nil, fmt.Errorf("no factory-relevant papers found")
 	}
 
-	log.Printf("[discover] fetched %d papers", len(papers))
+	log.Printf("[discover] fetched %d factory-relevant papers", len(papers))
 
 	// Group by category
 	groups := groupByCategory(papers)
@@ -78,8 +82,8 @@ func (d *Discoverer) FindClusters(ctx context.Context) ([]Cluster, error) {
 }
 
 func (d *Discoverer) fetchPapers(ctx context.Context) ([]Paper, error) {
-	// Fetch from multiple categories for diversity
-	categories := []string{"cs.AI", "cs.CL", "cs.LG", "cs.SE", "cs.CV"}
+	// Only categories that produce factory-improving tools
+	categories := []string{"cs.SE", "cs.CL", "cs.AI", "cs.LG"} // software engineering, NLP, AI, machine learning — NO cs.CV
 	var allPapers []Paper
 	seen := make(map[string]bool)
 
@@ -132,6 +136,36 @@ func (d *Discoverer) fetchPapers(ctx context.Context) ([]Paper, error) {
 	}
 
 	return allPapers, nil
+}
+
+// filterFactoryRelevant keeps only papers whose titles/abstracts relate to
+// topics that can improve the factory: code generation, testing, LLM optimization,
+// retrieval, agents, prompts, evaluation, embeddings, search.
+func filterFactoryRelevant(papers []Paper) []Paper {
+	keywords := []string{
+		"code generation", "code repair", "code review", "code search",
+		"test generation", "test", "testing", "software engineering",
+		"prompt", "instruction tuning", "alignment",
+		"retrieval", "rag", "search", "embedding", "vector",
+		"agent", "tool use", "function calling", "orchestration",
+		"evaluation", "benchmark", "quality", "hallucination",
+		"inference", "optimization", "efficient", "speculative decoding",
+		"fine-tuning", "lora", "training", "distillation",
+		"reasoning", "chain-of-thought", "planning",
+		"guardrail", "safety", "injection", "security",
+	}
+
+	var filtered []Paper
+	for _, p := range papers {
+		lower := strings.ToLower(p.Title + " " + p.Abstract)
+		for _, kw := range keywords {
+			if strings.Contains(lower, kw) {
+				filtered = append(filtered, p)
+				break
+			}
+		}
+	}
+	return filtered
 }
 
 func groupByCategory(papers []Paper) map[string][]Paper {
