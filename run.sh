@@ -57,7 +57,6 @@ while true; do
     # Run one cycle from source
     go run -buildvcs=false . run >> "$LOG" 2>&1 || echo "$(date): cycle error: $?" >> "$LOG"
 
-    # Short pause then go again — always working
-    echo "$(date): cycle done, next in 5 min" >> "$LOG"
-    sleep 300
+    # No sleep — immediately start next cycle
+    echo "$(date): cycle done, starting next immediately" >> "$LOG"
 done
