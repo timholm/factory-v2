@@ -68,7 +68,20 @@ Return a JSON object with:
 Be Tim. Be frustrated when things aren't working. Be specific. No hand-waving.`
 
 func runOverseer() {
-	log.Println("[overseer] === OVERSEER AUDIT STARTING ===")
+	// Log to both main log and overseer-specific log
+	overseerLog, _ := os.OpenFile("/tmp/factory-overseer.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if overseerLog != nil {
+		defer overseerLog.Close()
+	}
+	logBoth := func(format string, args ...interface{}) {
+		msg := fmt.Sprintf(format, args...)
+		log.Print(msg)
+		if overseerLog != nil {
+			fmt.Fprintf(overseerLog, "%s %s\n", time.Now().Format("2006/01/02 15:04:05"), msg)
+		}
+	}
+
+	logBoth("[overseer] === OVERSEER AUDIT STARTING ===")
 
 	status := collectOverseerStatus()
 	prompt := fmt.Sprintf(overseerPrompt, status)
@@ -229,11 +242,11 @@ func RunOverseerLoop(ctx context.Context) {
 			return
 		default:
 			runOverseer()
-			// Run every 30 minutes
+			// Run continuously — finish one audit, immediately start the next
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(30 * time.Minute):
+			default:
 			}
 		}
 	}
