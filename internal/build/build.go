@@ -175,15 +175,17 @@ func invokeClaude(ctx context.Context, binary, prompt, workDir string, maxTurns 
 		claudeCmd += " " + shellQuote(a)
 	}
 
-	// Kill old tmux session if exists
-	exec.Command("tmux", "kill-session", "-t", "factory-build").Run()
+	// Use product name as tmux session name so each parallel build is visible
+	// Watch with: tmux list-sessions  |  tmux attach -t build-{name}
+	sessionName := "build-" + filepath.Base(workDir)
 
-	// Create new tmux session running claude
-	// This lets you watch with: tmux attach -t factory-build
+	// Kill old session if exists
+	exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+
 	tmuxArgs := []string{
-		"new-session", "-d", "-s", "factory-build",
+		"new-session", "-d", "-s", sessionName,
 		"-x", "200", "-y", "50",
-		"sh", "-c", fmt.Sprintf("cd %s && %s; echo '=== BUILD COMPLETE ==='; sleep 5", shellQuote(workDir), claudeCmd),
+		"sh", "-c", fmt.Sprintf("cd %s && %s; echo '=== BUILD COMPLETE: %s ==='; sleep 5", shellQuote(workDir), claudeCmd, sessionName),
 	}
 
 	tmuxCmd := exec.Command("tmux", tmuxArgs...)
@@ -199,17 +201,17 @@ func invokeClaude(ctx context.Context, binary, prompt, workDir string, maxTurns 
 		return cmd.Run()
 	}
 
-	log.Printf("[build] Claude running in tmux session 'factory-build' — attach with: tmux attach -t factory-build")
+	log.Printf("[build] Claude running in tmux '%s' — attach with: tmux attach -t %s", sessionName, sessionName)
 
 	// Wait for tmux session to finish
 	for {
-		check := exec.Command("tmux", "has-session", "-t", "factory-build")
+		check := exec.Command("tmux", "has-session", "-t", sessionName)
 		if check.Run() != nil {
 			break // session ended
 		}
 		select {
 		case <-ctx.Done():
-			exec.Command("tmux", "kill-session", "-t", "factory-build").Run()
+			exec.Command("tmux", "kill-session", "-t", sessionName).Run()
 			return ctx.Err()
 		case <-sleepChan(2):
 		}
