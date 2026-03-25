@@ -4,26 +4,21 @@ set -euo pipefail
 LOG="/tmp/factory-v2.log"
 echo "$(date): factory-v2 starting" >> "$LOG"
 
+# Prevent Mac from sleeping while factory runs
+caffeinate -d -i -s &
+CAFF_PID=$!
+trap "kill $CAFF_PID 2>/dev/null" EXIT
+
 # Port forwards (reconnect if dead)
 setup_portforward() {
     if ! lsof -ti :5432 > /dev/null 2>&1; then
-        kubectl port-forward pod/postgres-0 5432:5432 -n factory &
+        kubectl port-forward pod/postgres-0 5432:5432 -n factory >> /tmp/portforward.log 2>&1 &
         sleep 2
     fi
     if ! lsof -ti :9090 > /dev/null 2>&1; then
-        kubectl port-forward -n factory svc/archive-serve 9090:9090 &
+        kubectl port-forward -n factory svc/archive-serve 9090:9090 >> /tmp/portforward.log 2>&1 &
         sleep 2
     fi
-}
-
-# Refresh Claude credentials
-refresh_creds() {
-    claude -p "echo hello" --max-turns 1 --output-format text > /dev/null 2>&1 || true
-    kubectl delete secret claude-credentials --namespace factory 2>/dev/null || true
-    kubectl create secret generic claude-credentials \
-        --namespace factory \
-        --from-file=credentials.json="$HOME/.claude/.credentials.json" 2>/dev/null || true
-    # No v1 pods to restart — factory-v2 runs locally
 }
 
 # Get Postgres password
@@ -38,26 +33,31 @@ export CLAUDE_BINARY=claude
 
 mkdir -p "$GIT_DIR"
 
-# Main loop — never stops
+# Main loop — NEVER stops, NEVER sleeps more than 5 min
 while true; do
     echo "$(date): === FACTORY V2 CYCLE ===" >> "$LOG"
-    
+
     # Ensure port forwards are alive
     setup_portforward
-    
-    # Refresh creds every cycle (cheap, prevents expiry issues)
-    refresh_creds >> "$LOG" 2>&1 || true
-    
-    # Refresh GitHub token (might have rotated)
+
+    # Refresh GitHub token
     export GITHUB_TOKEN=$(gh auth token 2>/dev/null || echo "$GITHUB_TOKEN")
-    
-    # Pull latest code if remote has changes
+
+    # Refresh Claude creds (quick, prevents expiry)
+    claude -p "ok" --max-turns 1 --output-format text > /dev/null 2>&1 || true
+    kubectl delete secret claude-credentials --namespace factory 2>/dev/null || true
+    kubectl create secret generic claude-credentials \
+        --namespace factory \
+        --from-file=credentials.json="$HOME/.claude/.credentials.json" 2>/dev/null || true
+
+    # Pull latest code
     cd "$HOME/factory-v2"
     git pull --ff-only origin main >> "$LOG" 2>&1 || true
 
-    # Run from source — picks up code changes automatically, no manual rebuild needed
-    timeout 3600 go run . run >> "$LOG" 2>&1 || echo "$(date): cycle exited: $?" >> "$LOG"
-    
-    echo "$(date): cycle complete, sleeping 30m" >> "$LOG"
-    sleep 1800
+    # Run one cycle from source
+    go run -buildvcs=false . run >> "$LOG" 2>&1 || echo "$(date): cycle error: $?" >> "$LOG"
+
+    # Short pause then go again — always working
+    echo "$(date): cycle done, next in 5 min" >> "$LOG"
+    sleep 300
 done
