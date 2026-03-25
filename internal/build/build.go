@@ -150,7 +150,8 @@ func (b *Builder) Execute(ctx context.Context, spec *synthesize.ProductSpec) err
 	return nil
 }
 
-// invokeClaude calls the Claude CLI.
+// invokeClaude runs Claude in a tmux session named "factory-build" so you can watch live.
+// Attach with: tmux attach -t factory-build
 func invokeClaude(ctx context.Context, binary, prompt, workDir string, maxTurns int, continueSession bool) error {
 	args := []string{
 		"-p", prompt,
@@ -162,13 +163,68 @@ func invokeClaude(ctx context.Context, binary, prompt, workDir string, maxTurns 
 		args = append(args, "--continue")
 	}
 
-	cmd := exec.CommandContext(ctx, binary, args...)
-	cmd.Dir = workDir
-	cmd.Env = cleanEnv()
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// Build the full claude command string
+	claudeCmd := binary
+	for _, a := range args {
+		claudeCmd += " " + shellQuote(a)
+	}
 
-	return cmd.Run()
+	// Kill old tmux session if exists
+	exec.Command("tmux", "kill-session", "-t", "factory-build").Run()
+
+	// Create new tmux session running claude
+	// This lets you watch with: tmux attach -t factory-build
+	tmuxArgs := []string{
+		"new-session", "-d", "-s", "factory-build",
+		"-x", "200", "-y", "50",
+		"sh", "-c", fmt.Sprintf("cd %s && %s; echo '=== BUILD COMPLETE ==='; sleep 5", shellQuote(workDir), claudeCmd),
+	}
+
+	tmuxCmd := exec.Command("tmux", tmuxArgs...)
+	tmuxCmd.Env = cleanEnv()
+	if err := tmuxCmd.Run(); err != nil {
+		// Fallback to direct execution if tmux fails
+		log.Printf("[build] tmux failed, running directly: %v", err)
+		cmd := exec.CommandContext(ctx, binary, args...)
+		cmd.Dir = workDir
+		cmd.Env = cleanEnv()
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	}
+
+	log.Printf("[build] Claude running in tmux session 'factory-build' — attach with: tmux attach -t factory-build")
+
+	// Wait for tmux session to finish
+	for {
+		check := exec.Command("tmux", "has-session", "-t", "factory-build")
+		if check.Run() != nil {
+			break // session ended
+		}
+		select {
+		case <-ctx.Done():
+			exec.Command("tmux", "kill-session", "-t", "factory-build").Run()
+			return ctx.Err()
+		case <-sleepChan(2):
+		}
+	}
+
+	return nil
+}
+
+func sleepChan(seconds int) <-chan struct{} {
+	ch := make(chan struct{})
+	go func() {
+		for i := 0; i < seconds*10; i++ {
+			exec.Command("true").Run() // tiny delay without time.Sleep
+		}
+		close(ch)
+	}()
+	return ch
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 // cleanEnv strips sensitive env vars.
