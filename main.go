@@ -31,6 +31,7 @@ func main() {
 	root.AddCommand(buildCmd())
 	root.AddCommand(statusCmd())
 	root.AddCommand(auditCmd())
+	root.AddCommand(overseerCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -66,6 +67,9 @@ func runCmd() *cobra.Command {
 				audit:      audit.New(cfg, store),
 				report:     report.New(store),
 			}
+
+			// Start overseer in background — watches and critiques
+		go RunOverseerLoop(ctx)
 
 			return f.Run(ctx)
 		},
@@ -140,6 +144,17 @@ func auditCmd() *cobra.Command {
 
 			a := audit.New(cfg, store)
 			return a.RunAll(ctx)
+		},
+	}
+}
+
+func overseerCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "overseer",
+		Short: "Run one overseer audit — Opus critiques the factory like Tim would",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			runOverseer()
+			return nil
 		},
 	}
 }
