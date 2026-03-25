@@ -247,11 +247,11 @@ func RunOverseerLoop(ctx context.Context) {
 			return
 		default:
 			runOverseer()
-			// Run continuously — finish one audit, immediately start the next
+			// Run every 10 minutes — don't compete with build workers for Claude sessions
 			select {
 			case <-ctx.Done():
 				return
-			default:
+			case <-time.After(10 * time.Minute):
 			}
 		}
 	}

@@ -48,7 +48,7 @@ func NewPipeline(cfg *config.Config, store *db.Store) *Pipeline {
 		audit:      audit.New(cfg, store),
 		report:     report.New(store),
 		specCh:     make(chan *synthesize.ProductSpec, 20),
-		maxWorkers: 6,
+		maxWorkers: 4,
 	}
 }
 
@@ -67,7 +67,7 @@ func (p *Pipeline) Run(ctx context.Context) error {
 
 	// Builder pool: starts at 2, scales up to 6
 	atomic.StoreInt32(&p.workers, 0)
-	initialWorkers := int32(2)
+	initialWorkers := int32(4)
 	for i := int32(0); i < initialWorkers; i++ {
 		p.spawnWorker(ctx, &wg, i)
 	}
