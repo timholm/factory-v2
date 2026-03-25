@@ -58,21 +58,9 @@ func runCmd() *cobra.Command {
 				return fmt.Errorf("db migrate: %w", err)
 			}
 
-			f := &Factory{
-				cfg:        cfg,
-				db:         store,
-				discover:   discover.New(cfg.ArchiveURL),
-				research:   research.New(cfg.GitHubToken),
-				synthesize: synthesize.New(cfg.ClaudeBinary),
-				build:      build.New(cfg, store),
-				audit:      audit.New(cfg, store),
-				report:     report.New(store),
-			}
-
-			// Start overseer in background — watches and critiques
-		go RunOverseerLoop(ctx)
-
-			return f.Run(ctx)
+			// v3 pipeline: streaming, auto-scaling, self-healing
+			p := NewPipeline(cfg, store)
+			return p.Run(ctx)
 		},
 	}
 }
