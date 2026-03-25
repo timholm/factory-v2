@@ -73,10 +73,16 @@ func (b *Builder) Execute(ctx context.Context, spec *synthesize.ProductSpec) err
 		return fmt.Errorf("render prompt: %w", err)
 	}
 
-	// Adjust turns based on oracle estimate
+	// Adjust turns based on oracle estimate — never undershoot
 	maxTurns := 30
-	if simResult.EstimatedTurns > 0 && simResult.EstimatedTurns < 30 {
-		maxTurns = simResult.EstimatedTurns + 5 // buffer
+	if simResult.EstimatedTurns > maxTurns {
+		maxTurns = simResult.EstimatedTurns
+		log.Printf("[oracle] raising turn cap to %d (oracle estimate)", maxTurns)
+	} else if simResult.EstimatedTurns > 0 {
+		maxTurns = simResult.EstimatedTurns + 5
+	}
+	if maxTurns > 60 {
+		maxTurns = 60 // hard ceiling
 	}
 
 	// ONE Claude session to build everything

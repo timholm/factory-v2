@@ -57,7 +57,7 @@ Return a JSON object with:
     {
       "problem": "specific problem",
       "evidence": "what you see that proves it",
-      "fix": "exact command or code change",
+      "fix": "a SINGLE executable shell command (not English description — a real bash command that fixes it)",
       "priority": "critical|high|medium"
     }
   ],
@@ -74,8 +74,13 @@ func runOverseer() {
 	prompt := fmt.Sprintf(overseerPrompt, status)
 
 	// Call Opus with highest thinking
-	cmd := exec.Command("claude", "-p", prompt, "--model", "opus", "--max-turns", "3", "--output-format", "text")
+	// Pipe prompt via stdin with --print (no tools, just text response)
+	ctx2, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx2, "claude", "--print", "--output-format", "text", "--model", "sonnet")
+	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Env = cleanOverseerEnv()
+	cmd.Dir = os.TempDir()
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
