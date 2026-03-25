@@ -76,12 +76,16 @@ func (s *Synthesizer) Fuse(ctx context.Context, res *research.ResearchResult) (*
 	// Strip sensitive env vars
 	cmd.Env = cleanEnv()
 
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
+	// Log what Opus said (truncated)
+	outStr := strings.TrimSpace(string(out))
+	if len(outStr) > 500 {
+		log.Printf("[opus:%s] %s...", res.ProblemSpace, outStr[:500])
+	} else if len(outStr) > 0 {
+		log.Printf("[opus:%s] %s", res.ProblemSpace, outStr)
+	}
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("claude opus failed: %s\nstderr: %s", err, string(ee.Stderr))
-		}
-		return nil, fmt.Errorf("claude opus: %w", err)
+		return nil, fmt.Errorf("claude opus failed: %w (output: %s)", err, outStr)
 	}
 
 	// Parse the JSON from Claude's output

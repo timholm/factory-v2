@@ -203,6 +203,28 @@ func invokeClaude(ctx context.Context, binary, prompt, workDir string, maxTurns 
 
 	log.Printf("[build] Claude running in tmux '%s' — attach with: tmux attach -t %s", sessionName, sessionName)
 
+	// Also tee tmux output to the main log so everything is in one place
+	go func() {
+		for {
+			check := exec.Command("tmux", "has-session", "-t", sessionName)
+			if check.Run() != nil {
+				return
+			}
+			// Capture last line from tmux pane and log it
+			out, err := exec.Command("tmux", "capture-pane", "-t", sessionName, "-p", "-l", "1").CombinedOutput()
+			if err == nil {
+				line := strings.TrimSpace(string(out))
+				if line != "" && !strings.HasPrefix(line, "⠋") && !strings.HasPrefix(line, "⠙") {
+					log.Printf("[claude:%s] %s", filepath.Base(workDir), line)
+				}
+			}
+			// Poll every 3 seconds
+			for i := 0; i < 30; i++ {
+				exec.Command("true").Run()
+			}
+		}
+	}()
+
 	// Wait for tmux session to finish
 	for {
 		check := exec.Command("tmux", "has-session", "-t", sessionName)

@@ -59,9 +59,13 @@ body { background: #0a0a0f; color: #00ff88; font-family: 'SF Mono', 'Fira Code',
 .warn { color: #ffaa00; }
 .err { color: #ff4444; }
 .build { color: #44aaff; }
-.oracle { color: #ff88ff; }
+.oracle { color: #cc88ff; }
+.opus { color: #ff88cc; }
+.overseer { color: #ff6688; font-weight: bold; }
 .ship { color: #00ffaa; font-weight: bold; }
 .cycle { color: #888; border-top: 1px solid #222; padding-top: 8px; margin-top: 8px; }
+.w0 { color: #44aaff; } .w1 { color: #ffaa44; } .w2 { color: #44ffaa; }
+.w3 { color: #ff44aa; } .w4 { color: #aaff44; } .w5 { color: #44aaff; }
 </style>
 </head>
 <body>
@@ -88,7 +92,18 @@ evtSource.onmessage = function(e) {
   const line = document.createElement('div');
   line.className = 'line';
   let text = e.data;
-  if (text.includes('[oracle]')) line.classList.add('oracle');
+  if (text.includes('[overseer]')) line.classList.add('overseer');
+  else if (text.includes('[opus:')) line.classList.add('opus');
+  else if (text.includes('[oracle]')) line.classList.add('oracle');
+  else if (text.includes('[claude:')) {
+    // Color by build name hash
+    let m = text.match(/\[claude:(\w+)\]/);
+    if (m) { let h = 0; for(let c of m[1]) h = ((h<<5)-h)+c.charCodeAt(0); line.classList.add('w'+Math.abs(h%6)); }
+  }
+  else if (text.includes('[worker')) {
+    let m = text.match(/\[worker (\d)/);
+    if (m) line.classList.add('w'+m[1]);
+  }
   else if (text.includes('[build]')) line.classList.add('build');
   else if (text.includes('shipped')) line.classList.add('ship');
   else if (text.includes('error') || text.includes('ERROR') || text.includes('failed')) line.classList.add('err');
