@@ -5,6 +5,7 @@ go 1.22
 require (
 	github.com/jackc/pgx/v5 v5.7.4
 	github.com/spf13/cobra v1.8.1
+	github.com/timholm/forge-oracle v0.0.0-20260325025426-2defae94aebb
 )
 
 require (

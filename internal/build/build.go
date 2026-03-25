@@ -12,6 +12,11 @@ import (
 	"github.com/timholm/factory-v2/internal/config"
 	"github.com/timholm/factory-v2/internal/db"
 	"github.com/timholm/factory-v2/internal/synthesize"
+
+	"github.com/timholm/forge-oracle/pkg/calibrate"
+	"github.com/timholm/forge-oracle/pkg/diagnose"
+	"github.com/timholm/forge-oracle/pkg/simulate"
+	oracletypes "github.com/timholm/forge-oracle/pkg/types"
 )
 
 // Builder builds repos from product specs.
@@ -32,6 +37,30 @@ func (b *Builder) Execute(ctx context.Context, spec *synthesize.ProductSpec) err
 		return fmt.Errorf("mkdir: %w", err)
 	}
 
+	// === ORACLE: Calibrate spec complexity ===
+	cal := calibrate.NewDefault()
+	oracleSpec := toOracleSpec(spec)
+	calResult := cal.Calibrate(oracleSpec)
+	log.Printf("[oracle] calibrate %s: complexity=%.1f, turns=%d, buildable=%v",
+		spec.Name, calResult.ComplexityScore, calResult.EstimatedTurns, calResult.Buildable)
+	if !calResult.Buildable {
+		log.Printf("[oracle] %s too complex — suggested cuts: %v", spec.Name, calResult.SuggestedCuts)
+		// Apply cuts: reduce features to what's buildable
+		if len(spec.Features) > 5 {
+			spec.Features = spec.Features[:5]
+			log.Printf("[oracle] trimmed features to 5 for %s", spec.Name)
+		}
+	}
+
+	// === ORACLE: Simulate build success ===
+	sim := simulate.NewDefault()
+	simResult := sim.Simulate(oracleSpec)
+	log.Printf("[oracle] simulate %s: confidence=%.0f%%, turns=%d",
+		spec.Name, simResult.Confidence*100, simResult.EstimatedTurns)
+	if simResult.Confidence < 0.2 {
+		return fmt.Errorf("oracle: skipping %s — predicted success %.0f%% is too low", spec.Name, simResult.Confidence*100)
+	}
+
 	// Scaffold the workspace
 	log.Printf("[build] scaffolding %s in %s", spec.Name, workDir)
 	if err := Scaffold(workDir, spec, b.cfg.GitHubUser); err != nil {
@@ -44,9 +73,15 @@ func (b *Builder) Execute(ctx context.Context, spec *synthesize.ProductSpec) err
 		return fmt.Errorf("render prompt: %w", err)
 	}
 
+	// Adjust turns based on oracle estimate
+	maxTurns := 30
+	if simResult.EstimatedTurns > 0 && simResult.EstimatedTurns < 30 {
+		maxTurns = simResult.EstimatedTurns + 5 // buffer
+	}
+
 	// ONE Claude session to build everything
-	log.Printf("[build] invoking Claude for %s (max 30 turns)", spec.Name)
-	if err := invokeClaude(ctx, b.cfg.ClaudeBinary, prompt, workDir, 30, false); err != nil {
+	log.Printf("[build] invoking Claude for %s (max %d turns)", spec.Name, maxTurns)
+	if err := invokeClaude(ctx, b.cfg.ClaudeBinary, prompt, workDir, maxTurns, false); err != nil {
 		return fmt.Errorf("claude build: %w", err)
 	}
 
@@ -58,10 +93,21 @@ func (b *Builder) Execute(ctx context.Context, spec *synthesize.ProductSpec) err
 
 	// Check if tests pass
 	if !TestsPass(workDir) {
-		// Get test errors and retry
 		errors := GetTestErrors(workDir)
-		retryPrompt := fmt.Sprintf("Tests failed with the following errors. Fix them:\n\n%s", errors)
-		log.Printf("[build] tests failed for %s, retrying with 15 turns", spec.Name)
+
+		// === ORACLE: Diagnose failure and generate targeted fix ===
+		diag := diagnose.New()
+		faultTree := diag.Parse(errors)
+		log.Printf("[oracle] diagnose %s: category=%s, faults=%d",
+			spec.Name, faultTree.Root.Category, diagnose.CountFaults(faultTree.Root))
+
+		// Use oracle's targeted fix prompt instead of generic "fix them"
+		retryPrompt := faultTree.FixPrompt
+		if retryPrompt == "" {
+			retryPrompt = fmt.Sprintf("Tests failed. Fix them:\n\n%s", errors)
+		}
+
+		log.Printf("[build] tests failed for %s, retrying with oracle-guided fix (15 turns)", spec.Name)
 		if err := invokeClaude(ctx, b.cfg.ClaudeBinary, retryPrompt, workDir, 15, true); err != nil {
 			log.Printf("[build] retry failed: %v", err)
 		}
@@ -136,6 +182,16 @@ func cleanEnv() []string {
 		env = append(env, e)
 	}
 	return env
+}
+
+// toOracleSpec converts a factory ProductSpec to an oracle ProductSpec.
+func toOracleSpec(spec *synthesize.ProductSpec) oracletypes.ProductSpec {
+	return oracletypes.ProductSpec{
+		Name:       spec.Name,
+		Language:   spec.Language,
+		Features:   spec.Features,
+		Techniques: spec.Techniques,
+	}
 }
 
 // TestsPass runs make test and returns true if it succeeds.
